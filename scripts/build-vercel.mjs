@@ -51,47 +51,56 @@ cpSync(join(root, "dist/server"), funcDir, { recursive: true });
 // Node.js wrapper: bridges Node http.IncomingMessage → Web API Request → Response
 writeFileSync(
   join(funcDir, "_entry.mjs"),
-  `import server from "./server.js";
+  `import serverModule from "./server.js";
+
+// server.js exports { default: { fetch } } — unwrap it
+const server = serverModule?.default ?? serverModule;
 
 export default async function handler(req, res) {
-  const proto = req.headers["x-forwarded-proto"] ?? "https";
-  const host  = req.headers["host"] ?? "localhost";
+  try {
+    const proto = req.headers["x-forwarded-proto"] ?? "https";
+    const host  = req.headers["host"] ?? "localhost";
 
-  // Collect request body
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  const bodyBuf = Buffer.concat(chunks);
+    // Collect request body
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const bodyBuf = Buffer.concat(chunks);
 
-  // Build Headers object
-  const headers = new Headers();
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (v == null) continue;
-    if (Array.isArray(v)) v.forEach((vi) => headers.append(k, vi));
-    else headers.set(k, v);
+    // Build Headers object
+    const headers = new Headers();
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (v == null) continue;
+      if (Array.isArray(v)) v.forEach((vi) => headers.append(k, vi));
+      else headers.set(k, v);
+    }
+
+    const url = \`\${proto}://\${host}\${req.url}\`;
+    const hasBody = bodyBuf.length > 0 && !["GET", "HEAD"].includes(req.method ?? "");
+
+    const webRequest = new Request(url, {
+      method: req.method,
+      headers,
+      body: hasBody ? bodyBuf : undefined,
+      ...(hasBody ? { duplex: "half" } : {}),
+    });
+
+    const webResponse = await server.fetch(webRequest);
+
+    res.statusCode = webResponse.status;
+    webResponse.headers.forEach((v, k) => {
+      try { res.setHeader(k, v); } catch { /* skip invalid headers */ }
+    });
+
+    const buf = Buffer.from(await webResponse.arrayBuffer());
+    res.end(buf);
+  } catch (err) {
+    console.error("[SSR handler error]", err);
+    res.statusCode = 500;
+    res.setHeader("content-type", "text/plain");
+    res.end("Internal Server Error: " + (err?.message ?? String(err)));
   }
-
-  const url = \`\${proto}://\${host}\${req.url}\`;
-  const hasBody = bodyBuf.length > 0 && !["GET", "HEAD"].includes(req.method ?? "");
-
-  const webRequest = new Request(url, {
-    method: req.method,
-    headers,
-    body: hasBody ? bodyBuf : undefined,
-    ...(hasBody ? { duplex: "half" } : {}),
-  });
-
-  const webResponse = await server.fetch(webRequest, {}, {});
-
-  res.statusCode = webResponse.status;
-  webResponse.headers.forEach((v, k) => {
-    try { res.setHeader(k, v); } catch { /* skip invalid headers */ }
-  });
-
-  const buf = Buffer.from(await webResponse.arrayBuffer());
-  res.end(buf);
 }
-`
-);
+`);
 
 // Tell Vercel: Node 20, entry = _entry.mjs
 writeFileSync(
