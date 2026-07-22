@@ -1,31 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { useState } from "react";
 import { Phone, Mail, MapPin } from "lucide-react";
-
-export const submitContactForm = createServerFn({ method: "POST" })
-  .validator(
-    (data: { name: string; email: string; phone: string; message: string }) =>
-      data,
-  )
-  .handler(async ({ data }) => {
-    const { insertContact } = await import("@/lib/db");
-    try {
-      insertContact(data);
-      return {
-        success: true,
-        message: "Thank you for contacting us. We will get back to you soon!",
-      };
-    } catch (error) {
-      console.error("Failed to insert contact:", error);
-      return {
-        success: false,
-        message: "Failed to submit form. Please try again later.",
-      };
-    }
-  });
 
 export const Route = createFileRoute("/contact")({
   component: ContactPage,
@@ -50,15 +27,31 @@ function ContactPage() {
     setStatus({ type: "", msg: "" });
 
     try {
-      const response = await submitContactForm({ data: formData });
-      if (response.success) {
-        setStatus({ type: "success", msg: response.message });
+      // Client-side submission via mailto fallback / Web3Forms
+      const response = await fetch("https://api.web3forms.com/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          access_key: "00000000-0000-0000-0000-000000000000", // Replace with your Web3Forms key at https://web3forms.com
+          subject: `New Contact: ${formData.name}`,
+          from_name: formData.name,
+          email: formData.email,
+          phone: formData.phone,
+          message: formData.message,
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setStatus({
+          type: "success",
+          msg: "Thank you for contacting us. We will get back to you soon!",
+        });
         setFormData({ name: "", email: "", phone: "", message: "" });
       } else {
-        setStatus({ type: "error", msg: response.message });
+        setStatus({ type: "error", msg: "Failed to submit form. Please try again later." });
       }
-    } catch (err) {
-      setStatus({ type: "error", msg: "An unexpected error occurred." });
+    } catch {
+      setStatus({ type: "error", msg: "An unexpected error occurred. Please try again." });
     } finally {
       setIsSubmitting(false);
     }
